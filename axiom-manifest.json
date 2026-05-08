@@ -1,0 +1,57 @@
+{
+  "manifest_version": "1.0.0",
+  "package": {
+    "name": "com.axiom.agentbridge",
+    "version": "1.0.0",
+    "unity": "6000.3"
+  },
+  "contracts": {
+    "workspace_rules": {
+      "version": "1.0.0",
+      "files": {
+        ".cursorrules": "Cursor IDE agent API reference — 20 core rules, full tool API",
+        "project_instructions.md": "JSON command gateway schema, Token-Lean Implementation Template",
+        "CLAUDE.md": "Claude Code complete reference — rules, tool API, command schema in single file"
+      }
+    },
+    "diagnostic_bridge": {
+      "tool_count": 22,
+      "tools": [
+        "hierarchy_lens", "log_mirror", "component_inspector", "reference_scanner",
+        "project_cartographer", "scene_diff", "smart_search", "settings_reporter",
+        "script_analyzer", "prefab_auditor", "ui_toolkit_inspector", "test_runner",
+        "physics_reporter", "animation_inspector", "audio_reporter", "navmesh_inspector",
+        "shader_auditor", "render_auditor", "accessibility_validator", "ci_sweep",
+        "project_onboarder", "project_context"
+      ]
+    },
+    "action_tools": {
+      "tool_count": 16,
+      "tools": [
+        "scene_actions", "component_actions", "wiring_utility", "asset_actions",
+        "settings_actions", "render_actions", "build_profile_actions",
+        "package_manager_actions", "play_mode_actions", "screen_capture_actions",
+        "prefab_actions", "input_simulation_actions", "build_pipeline_hooks",
+        "multiplayer_actions", "vision_analysis", "sentis_actions"
+      ]
+    },
+    "mcp_integration": {
+      "conditional_define": "AXIOM_HAS_UNITY_ASSISTANT",
+      "tools": ["Axiom_Gateway", "Axiom_Status", "Axiom_ReadReport", "Axiom_Verify", "Axiom_Rules"]
+    }
+  },
+  "optional_dependencies": {
+    "com.unity.nuget.newtonsoft-json": { "define": "AXIOM_HAS_NEWTONSOFT" },
+    "com.unity.inputsystem": { "define": "AXIOM_HAS_INPUT_SYSTEM" },
+    "com.unity.multiplayer.playmode": { "define": "AXIOM_HAS_MPPM" },
+    "com.unity.sentis": { "define": "AXIOM_HAS_SENTIS" },
+    "com.unity.ai.assistant": { "define": "AXIOM_HAS_UNITY_ASSISTANT" }
+  },
+  "file_inventory": {
+    "core": 8,
+    "diagnostics": 22,
+    "actions": 16,
+    "mcp": 2,
+    "total_source_files": 48
+  }
+}
