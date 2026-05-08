@@ -1,0 +1,81 @@
+name: UPM Release
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  upm-split:
+    name: Create UPM branch from tag
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Get version from tag
+        id: version
+        run: echo "TAG=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+
+      - name: Split UPM package from Assets/Axiom
+        run: |
+          # Delete local upm branch if it exists (required for re-runs)
+          git branch -d upm 2>/dev/null || true
+
+          # Extract Assets/Axiom/ into a new upm branch (preserves history)
+          git subtree split -P "Assets/Axiom" -b upm
+
+          # Switch to the upm branch
+          git checkout upm
+
+          # Configure git for commits
+          git config --global user.name 'github-actions[bot]'
+          git config --global user.email 'github-actions[bot]@users.noreply.github.com'
+
+          # Rename WorkspaceRules → WorkspaceRules~ (Unity won't import tilde folders)
+          # Also rename .txt TextAssets to their real filenames for the UPM installer
+          if [ -d "Editor/WorkspaceRules" ]; then
+            git mv Editor/WorkspaceRules "Editor/WorkspaceRules~"
+            rm -f Editor/WorkspaceRules.meta
+
+            # Rename TextAsset .txt files to real filenames
+            cd "Editor/WorkspaceRules~"
+            [ -f cursorrules.txt ] && git mv cursorrules.txt .cursorrules
+            [ -f cursorrules.txt.meta ] && rm -f cursorrules.txt.meta
+            [ -f project_instructions.txt ] && git mv project_instructions.txt project_instructions.md
+            [ -f project_instructions.txt.meta ] && rm -f project_instructions.txt.meta
+            [ -f claude.txt ] && git mv claude.txt CLAUDE.md
+            [ -f claude.txt.meta ] && rm -f claude.txt.meta
+            cd ../..
+          fi
+
+          # Remove .meta files for renamed items (Unity regenerates them on import)
+          rm -f "Editor/WorkspaceRules.meta"
+
+          # Commit all changes
+          git add -A
+          git diff --cached --quiet || git commit -m "fix: WorkspaceRules → WorkspaceRules~ with real filenames"
+
+          # Force push the upm branch
+          git push -f origin upm
+
+          # Tag the upm branch with the same version tag
+          git tag "${{ steps.version.outputs.TAG }}-upm"
+          git push origin "${{ steps.version.outputs.TAG }}-upm" --force
+
+      - name: Summary
+        run: |
+          echo "### UPM Branch Updated" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Tag:** ${{ steps.version.outputs.TAG }}" >> $GITHUB_STEP_SUMMARY
+          echo "**UPM Tag:** ${{ steps.version.outputs.TAG }}-upm" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Install via Package Manager:**" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "https://github.com/${{ github.repository }}.git#upm" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Install pinned version:**" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "https://github.com/${{ github.repository }}.git#${{ steps.version.outputs.TAG }}" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY

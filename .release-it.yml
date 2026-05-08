@@ -1,0 +1,29 @@
+---
+# release-it configuration for Axiom
+# Usage:
+#   release-it patch          # 1.0.0 → 1.0.1
+#   release-it minor          # 1.0.0 → 1.1.0
+#   release-it major          # 1.0.0 → 2.0.0
+#   release-it --dry-run      # preview without changes
+#   release-it patch --ci     # non-interactive mode
+
+git:
+  commitMessage: "chore: release v${version}"
+  tagName: "v${version}"
+  tagAnnotation: "Release v${version}"
+  changelog: npx auto-changelog --stdout --commit-limit false -u --template https://raw.githubusercontent.com/release-it/release-it/master/templates/changelog-compact.hbs
+
+github:
+  release: true
+  releaseName: "v${version}"
+
+npm:
+  publish: false
+
+hooks:
+  # Sync version to UPM package.json after bump
+  after:bump:
+    - node -e "const fs=require('fs'); const f='Assets/Axiom/package.json'; const p=JSON.parse(fs.readFileSync(f,'utf8')); p.version='${version}'; fs.writeFileSync(f,JSON.stringify(p,null,2)+'\\n');"
+    - node -e "const fs=require('fs'); const f='Assets/Axiom/axiom-manifest.json'; const p=JSON.parse(fs.readFileSync(f,'utf8')); p.package.version='${version}'; fs.writeFileSync(f,JSON.stringify(p,null,2)+'\\n');"
+    - npx auto-changelog -p
+    - git add Assets/Axiom/package.json Assets/Axiom/axiom-manifest.json CHANGELOG.md

@@ -1,0 +1,13 @@
+{
+  "name": "axiom-dev",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Axiom development workspace. This file is used by release-it for version management only.",
+  "scripts": {
+    "release": "release-it",
+    "release:patch": "release-it patch",
+    "release:minor": "release-it minor",
+    "release:major": "release-it major",
+    "release:dry": "release-it --dry-run"
+  }
+}
