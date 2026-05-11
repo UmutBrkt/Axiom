@@ -1,7 +1,7 @@
 {
   "name": "com.axiom.agentbridge",
-  "displayName": "Axiom — Diagnostic Bridge",
-  "version": "1.0.0",
+  "displayName": "Axiom - Diagnostic Bridge",
+  "version": "1.0.1",
   "unity": "6000.3",
   "description": "Token-efficient agentic toolset for Unity 6. Replaces expensive MCP browsing with bespoke editor script reports. 22 diagnostic tools, 16 action tools, JSON command gateway, native Unity MCP integration.",
   "keywords": [
@@ -16,5 +16,9 @@
   "author": {
     "name": "Umut B"
   },
-  "type": "tool"
+  "type": "tool",
+  "dependencies": {
+    "com.unity.nuget.newtonsoft-json": "3.2.1",
+    "com.unity.ai.assistant": "2.7.0-pre.1"
+  }
 }

@@ -2,7 +2,7 @@
   "manifest_version": "1.0.0",
   "package": {
     "name": "com.axiom.agentbridge",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "unity": "6000.3"
   },
   "contracts": {
