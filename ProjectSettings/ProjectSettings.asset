@@ -931,11 +931,11 @@ PlayerSettings:
   captureStartupLogs: {}
   activeInputHandler: 1
   windowsGamepadBackendHint: 0
-  cloudProjectId: be6d1381-1b56-4e88-a8e9-90e3a1b4d948
+  cloudProjectId: 1fc780f2-645e-42c1-ace5-0ecd14578f35
   framebufferDepthMemorylessMode: 0
   qualitySettingsNames: []
-  projectName: Axiom (1)
-  organizationId: one-man-company
+  projectName: Axiom
+  organizationId: artacod-as-publisher
   cloudEnabled: 0
   legacyClampBlendShapeWeights: 0
   hmiLoadingImage: {fileID: 0}

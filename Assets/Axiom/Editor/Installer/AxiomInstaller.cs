@@ -4,15 +4,10 @@ using UnityEditor.PackageManager;
 using UnityEditor.PackageManager.Requests;
 using System.IO;
 using System.Collections.Generic;
-using PackageInfo = UnityEditor.PackageManager.PackageInfo;  // ADDED: UPM mode detection
+using PackageInfo = UnityEditor.PackageManager.PackageInfo;
 
 namespace Axiom.Editor.Installer
 {
-    /// <summary>
-    /// An optional package that unlocks conditional Axiom features.
-    /// PackageId is the current/canonical package ID used for installation.
-    /// AltPackageId handles renamed packages (e.g. com.unity.sentis → com.unity.ai.inference).
-    /// </summary>
     internal readonly struct OptionalPackage
     {
         public readonly string PackageId;
@@ -38,54 +33,55 @@ namespace Axiom.Editor.Installer
     /// <summary>
     /// Deploys Axiom workspace rules and handles optional package installation.
     ///
-    /// Auto-detects install mode:
-    ///   UPM:    Reads from Editor/WorkspaceRules~/ via PackageInfo.FindForAssembly()
-    ///   Legacy: Reads TextAssets from Assets/Axiom/Editor/WorkspaceRules/
-    ///
-    /// Menu structure:
-    ///   Tools/Axiom/Install Workspace Rules to Project Root  (100)
-    ///   Tools/Axiom/Remove Workspace Rules from Project Root (101)
-    ///   Tools/Axiom/Check Optional Packages                  (102)
-    ///   Tools/Axiom/Verify Installation                      (200)
+    /// Handles three install scenarios for workspace rules:
+    ///   1. Development (Assets-based): TextAssets from Assets/Axiom/Editor/WorkspaceRules/
+    ///   2. UPM from OpenUPM or ?path= git URL: Editor/WorkspaceRules/ with .txt files (built from main)
+    ///   3. UPM from #upm git URL: Editor/WorkspaceRules~/ with real filenames (CI-renamed)
     /// </summary>
     public static class AxiomInstaller
     {
         private const string MenuRoot = "Tools/Axiom/";
 
-        // Legacy Assets-based TextAsset path
-        private const string LegacyWorkspaceRulesPath = "Assets/Axiom/Editor/WorkspaceRules";
+        // Development mode: TextAsset path in Assets
+        private const string DevWorkspaceRulesPath = "Assets/Axiom/Editor/WorkspaceRules";
 
-        // UPM tilde folder (ships with package, not imported by Unity)
-        private const string UpmWorkspaceRulesFolder = "Editor/WorkspaceRules~";
+        // UPM paths (relative to package root, resolved via PackageInfo)
+        private const string UpmTildeFolder   = "Editor/WorkspaceRules~";   // #upm branch
+        private const string UpmRegularFolder = "Editor/WorkspaceRules";    // OpenUPM / ?path=
 
-        // CHANGED: Added CLAUDE.md. Used by UPM mode — source filename → target at project root.
-        private static readonly (string sourceFile, string targetFile, string description)[] RootFiles =
+        // Tilde folder has real filenames (CI-renamed from .txt)
+        private static readonly (string sourceFile, string targetFile, string description)[] TildeFiles =
         {
             (".cursorrules",            ".cursorrules",            "Agent API reference (Cursor IDE)"),
             ("project_instructions.md", "project_instructions.md", "Command schema + implementation template"),
             ("CLAUDE.md",               "CLAUDE.md",               "Claude Code complete reference"),
         };
 
-        // CHANGED: Added claude entry. Used by legacy mode — TextAsset name → target at project root.
-        private static readonly (string sourceName, string targetName, string description)[] LegacyRootFiles =
+        // Regular folder has .txt TextAsset names (built from main as-is)
+        private static readonly (string sourceFile, string targetFile, string description)[] RegularFiles =
+        {
+            ("cursorrules.txt",          ".cursorrules",            "Agent API reference (Cursor IDE)"),
+            ("project_instructions.txt", "project_instructions.md", "Command schema + implementation template"),
+            ("claude.txt",               "CLAUDE.md",               "Claude Code complete reference"),
+        };
+
+        // Development mode uses AssetDatabase TextAssets (same names as RegularFiles but loaded differently)
+        private static readonly (string sourceName, string targetName, string description)[] DevFiles =
         {
             ("cursorrules",          ".cursorrules",            "Agent API reference (Cursor IDE)"),
             ("project_instructions", "project_instructions.md", "Command schema + implementation template"),
             ("claude",               "CLAUDE.md",               "Claude Code complete reference"),
         };
 
+        // All target filenames for Remove and Verify operations
+        private static readonly string[] AllTargetFiles = { ".cursorrules", "project_instructions.md", "CLAUDE.md" };
+
         /// <summary>
-        /// All optional packages that unlock conditional Axiom features behind #if guards.
-        /// Ordered by importance / likelihood of wanting to install.
+        /// Optional packages — only those that are truly optional.
+        /// Newtonsoft.Json and Unity AI Assistant are required dependencies in package.json.
         /// </summary>
         internal static readonly OptionalPackage[] OptionalPackages =
         {
-            new OptionalPackage(
-                "com.unity.nuget.newtonsoft-json", null,
-                "AXIOM_HAS_NEWTONSOFT",
-                "Newtonsoft.Json",
-                "Full JSON schema parsing in the gateway. Strongly recommended — enables richer command routing."),
-
             new OptionalPackage(
                 "com.unity.inputsystem", null,
                 "AXIOM_HAS_INPUT_SYSTEM",
@@ -103,12 +99,6 @@ namespace Axiom.Editor.Installer
                 "AXIOM_HAS_SENTIS",
                 "AI Inference (formerly Sentis)",
                 "SentisActions — run ONNX ML models from editor scripts. (Note: asmdef checks com.unity.sentis; update the version define if AXIOM_HAS_SENTIS does not fire.)"),
-
-            new OptionalPackage(
-                "com.unity.ai.assistant", null,
-                "AXIOM_HAS_UNITY_ASSISTANT",
-                "Unity AI Assistant",
-                "Native Unity MCP bridge — registers Axiom_Gateway, Axiom_Status, Axiom_ReadReport, Axiom_Verify, Axiom_Rules as MCP tools visible to Cursor / Claude Code / Windsurf."),
         };
 
         // ── Package installation queue ────────────────────────────────────
@@ -118,7 +108,7 @@ namespace Axiom.Editor.Installer
         private static int s_TotalToInstall;
         private static int s_InstalledCount;
 
-        // ── ADDED: UPM mode detection ─────────────────────────────────────
+        // ── Install mode detection ────────────────────────────────────────
 
         private static bool IsUpmInstall()
         {
@@ -131,44 +121,73 @@ namespace Axiom.Editor.Installer
             return info?.resolvedPath;
         }
 
-        // ── Workspace rules ───────────────────────────────────────────────
+        // ── Workspace rules: Install ──────────────────────────────────────
 
         [MenuItem(MenuRoot + "Install Workspace Rules to Project Root", false, 100)]
         public static void InstallWorkspaceRules()
         {
-            // CHANGED: Branch between UPM and legacy install modes
             if (IsUpmInstall())
                 InstallFromUpm();
             else
-                InstallFromLegacy();
+                InstallFromDev();
         }
 
-        // ADDED: UPM mode — reads from Editor/WorkspaceRules~/ via PackageInfo
+        /// <summary>
+        /// UPM install — handles both tilde and non-tilde WorkspaceRules folders.
+        /// Tilde folder exists on #upm branch installs (CI renames files to real names).
+        /// Regular folder exists on OpenUPM and ?path= installs (built from main, .txt names).
+        /// </summary>
         private static void InstallFromUpm()
         {
             string pkgPath = GetPackagePath();
-            string rulesPath = pkgPath != null ? Path.Combine(pkgPath, UpmWorkspaceRulesFolder) : null;
-
-            if (rulesPath == null || !Directory.Exists(rulesPath))
+            if (pkgPath == null)
             {
                 EditorUtility.DisplayDialog("Axiom — Error",
-                    "WorkspaceRules~ folder not found in package.\n" +
-                    "Try reinstalling the package.", "OK");
+                    "Could not locate Axiom package via PackageInfo.", "OK");
                 return;
             }
 
+            // Try tilde folder first (#upm branch — real filenames)
+            string tildePath = Path.Combine(pkgPath, UpmTildeFolder);
+            if (Directory.Exists(tildePath))
+            {
+                InstallFromDirectory(tildePath, TildeFiles);
+                return;
+            }
+
+            // Fall back to regular folder (OpenUPM / ?path= — .txt names)
+            string regularPath = Path.Combine(pkgPath, UpmRegularFolder);
+            if (Directory.Exists(regularPath))
+            {
+                InstallFromDirectory(regularPath, RegularFiles);
+                return;
+            }
+
+            EditorUtility.DisplayDialog("Axiom — Error",
+                $"WorkspaceRules folder not found in package.\n\n" +
+                $"Checked:\n  {tildePath}\n  {regularPath}\n\n" +
+                "Try reinstalling the package.", "OK");
+        }
+
+        /// <summary>
+        /// Reads files from a directory on disk and copies them to project root.
+        /// Used by both tilde and regular UPM install paths.
+        /// </summary>
+        private static void InstallFromDirectory(string dirPath,
+            (string sourceFile, string targetFile, string description)[] fileMap)
+        {
             string projectRoot = Path.GetDirectoryName(Application.dataPath);
             int installed = 0;
             int skipped = 0;
 
-            foreach (var (sourceFile, targetFile, description) in RootFiles)
+            foreach (var (sourceFile, targetFile, description) in fileMap)
             {
-                string src = Path.Combine(rulesPath, sourceFile);
+                string src = Path.Combine(dirPath, sourceFile);
                 string dst = Path.Combine(projectRoot, targetFile);
 
                 if (!File.Exists(src))
                 {
-                    Debug.LogWarning($"[Axiom] Source not found in package: {src}");
+                    Debug.LogWarning($"[Axiom] Source not found: {src}");
                     continue;
                 }
 
@@ -192,20 +211,22 @@ namespace Axiom.Editor.Installer
                 $"Workspace rules installed.\n\n" +
                 $"  Installed: {installed}\n" +
                 $"  Skipped:   {skipped}\n\n" +
-                $"Location: {projectRoot}",
-                "OK");
+                $"Location: {projectRoot}", "OK");
         }
 
-        // Original legacy mode — reads TextAssets from Assets/Axiom/Editor/WorkspaceRules/
-        private static void InstallFromLegacy()
+        /// <summary>
+        /// Development mode — reads TextAssets from Assets/Axiom/Editor/WorkspaceRules/.
+        /// Only used when running inside the Axiom development project itself.
+        /// </summary>
+        private static void InstallFromDev()
         {
             string projectRoot = Path.GetDirectoryName(Application.dataPath);
             int installed = 0;
             int skipped = 0;
 
-            foreach (var (sourceName, targetName, description) in LegacyRootFiles)
+            foreach (var (sourceName, targetName, description) in DevFiles)
             {
-                string sourcePath = $"{LegacyWorkspaceRulesPath}/{sourceName}.txt";
+                string sourcePath = $"{DevWorkspaceRulesPath}/{sourceName}.txt";
                 string targetPath = Path.Combine(projectRoot, targetName);
 
                 TextAsset asset = AssetDatabase.LoadAssetAtPath<TextAsset>(sourcePath);
@@ -235,9 +256,10 @@ namespace Axiom.Editor.Installer
                 $"Workspace rules installed.\n\n" +
                 $"  Installed: {installed}\n" +
                 $"  Skipped:   {skipped}\n\n" +
-                $"Location: {projectRoot}",
-                "OK");
+                $"Location: {projectRoot}", "OK");
         }
+
+        // ── Workspace rules: Remove ───────────────────────────────────────
 
         [MenuItem(MenuRoot + "Remove Workspace Rules from Project Root", false, 101)]
         public static void RemoveWorkspaceRules()
@@ -245,8 +267,7 @@ namespace Axiom.Editor.Installer
             string projectRoot = Path.GetDirectoryName(Application.dataPath);
             int removed = 0;
 
-            // CHANGED: Uses RootFiles (which now includes CLAUDE.md)
-            foreach (var (_, targetFile, _) in RootFiles)
+            foreach (string targetFile in AllTargetFiles)
             {
                 string targetPath = Path.Combine(projectRoot, targetFile);
                 if (File.Exists(targetPath))
@@ -283,7 +304,6 @@ namespace Axiom.Editor.Installer
                 return;
             }
 
-            // Summary dialog with three choices
             string summaryLines = "";
             foreach (var pkg in missing)
                 summaryLines += $"  • {pkg.FriendlyName}  ({pkg.PackageId})\n";
@@ -295,9 +315,9 @@ namespace Axiom.Editor.Installer
                 "Install all, or choose individually?",
                 "Install All", "Cancel", "Choose...");
 
-            if (choice == 1) return; // Cancel
+            if (choice == 1) return;
 
-            if (choice == 0) // Install All
+            if (choice == 0)
             {
                 var toInstall = new List<string>();
                 foreach (var pkg in missing)
@@ -306,7 +326,6 @@ namespace Axiom.Editor.Installer
                 return;
             }
 
-            // Choose individually
             var selected = new List<string>();
             foreach (var pkg in missing)
             {
@@ -338,76 +357,98 @@ namespace Axiom.Editor.Installer
             bool isUpm = IsUpmInstall();
             string report = "Axiom Installation Status\n=========================\n\n";
 
-            // ADDED: Show install mode
             report += $"Install Mode: {(isUpm ? "UPM Package" : "Development (Assets)")}\n";
             if (isUpm)
             {
                 var info = PackageInfo.FindForAssembly(typeof(AxiomInstaller).Assembly);
                 if (info != null) report += $"Package Version: {info.version}\n";
+                report += $"Package Path: {GetPackagePath()}\n";
             }
             report += "\n";
 
-            // Root workspace files — CHANGED: now includes CLAUDE.md
+            // Workspace rules at project root
             report += "Root Workspace Files:\n";
-            foreach (var (_, targetFile, description) in RootFiles)
+            var fileDescriptions = new Dictionary<string, string>
             {
-                string targetPath = Path.Combine(projectRoot, targetFile);
+                { ".cursorrules",            "Agent API reference (Cursor IDE)" },
+                { "project_instructions.md", "Command schema + implementation template" },
+                { "CLAUDE.md",               "Claude Code complete reference" },
+            };
+            foreach (var kvp in fileDescriptions)
+            {
+                string targetPath = Path.Combine(projectRoot, kvp.Key);
                 bool exists = File.Exists(targetPath);
-                report += $"  [{(exists ? "+" : "X")}] {targetFile}";
+                report += $"  [{(exists ? "+" : "X")}] {kvp.Key}";
                 report += exists ? " — OK" : " — MISSING (run Install Workspace Rules)";
-                report += $"  ({description})\n";
+                report += $"  ({kvp.Value})\n";
+            }
+
+            // WorkspaceRules source location (helps debug install issues)
+            if (isUpm)
+            {
+                string pkgPath = GetPackagePath();
+                string tildePath = Path.Combine(pkgPath, UpmTildeFolder);
+                string regularPath = Path.Combine(pkgPath, UpmRegularFolder);
+                bool hasTilde = Directory.Exists(tildePath);
+                bool hasRegular = Directory.Exists(regularPath);
+                report += $"\nWorkspaceRules Source:\n";
+                report += $"  [{(hasTilde ? "+" : "-")}] {UpmTildeFolder} (upm branch)\n";
+                report += $"  [{(hasRegular ? "+" : "-")}] {UpmRegularFolder} (OpenUPM/main)\n";
             }
 
             // AgentBridge source folders
             report += "\nAgentBridge Source:\n";
+            string basePath;
+            if (isUpm)
+                basePath = Path.Combine(GetPackagePath(), "Editor", "AgentBridge");
+            else
+                basePath = Path.Combine(Application.dataPath, "Axiom", "Editor", "AgentBridge");
+
             var folders = new[]
             {
-                ("Assets/Axiom/Editor/AgentBridge/Core",        ""),
-                ("Assets/Axiom/Editor/AgentBridge/Diagnostics", ""),
-                ("Assets/Axiom/Editor/AgentBridge/Actions",     ""),
-                ("Assets/Axiom/Editor/AgentBridge/MCP",         " (compiled only with com.unity.ai.assistant)"),
+                ("Core",        ""),
+                ("Diagnostics", ""),
+                ("Actions",     ""),
+                ("MCP",         " (requires com.unity.ai.assistant)"),
             };
             int totalScripts = 0;
-            foreach (var (folder, note) in folders)
+            foreach (var (sub, note) in folders)
             {
-                bool exists = AssetDatabase.IsValidFolder(folder);
+                string folderPath = Path.Combine(basePath, sub);
+                bool exists = Directory.Exists(folderPath);
                 int count = 0;
                 if (exists)
-                {
-                    count = AssetDatabase.FindAssets("t:MonoScript", new[] { folder }).Length;
-                    totalScripts += count;
-                }
-                report += $"  [{(exists ? "+" : "X")}] {folder}";
-                report += exists ? $" — {count} scripts{note}" : " — MISSING";
-                report += "\n";
+                    count = Directory.GetFiles(folderPath, "*.cs", SearchOption.TopDirectoryOnly).Length;
+                totalScripts += count;
+                report += $"  [{(exists ? "+" : "X")}] {sub}/ — {(exists ? $"{count} scripts{note}" : "MISSING")}\n";
             }
-            report += $"  Total: {totalScripts} source files" +
-                      $"  (expected 46 base + 2 MCP = 48 when ai.assistant installed)\n";
+            report += $"  Total: {totalScripts} source files (expected 48)\n";
 
-            // Assembly definition
-            string asmdefPath = "Assets/Axiom/Editor/AgentBridge/AgentBridge.asmdef";
-            bool asmdef = File.Exists(Path.Combine(projectRoot, asmdefPath));
-            report += $"\nAssembly Definition:\n  [{(asmdef ? "+" : "X")}] {asmdefPath}\n";
-
-            // Report output directory
-            string reportsDir = Path.Combine(projectRoot, "AgentReports");
-            bool reportsExist = Directory.Exists(reportsDir);
-            report += $"\nReport Output:\n  [{(reportsExist ? "+" : "-")}] AgentReports/";
-            report += reportsExist ? " — exists\n" : " — auto-created on first diagnostic run\n";
+            // Required dependencies
+            report += "\nRequired Dependencies:\n";
+            bool hasNewtonsoft = IsPackageInstalled("com.unity.nuget.newtonsoft-json");
+            bool hasAssistant = IsPackageInstalled("com.unity.ai.assistant");
+            report += $"  [{(hasNewtonsoft ? "+" : "X")}] Newtonsoft.Json — {(hasNewtonsoft ? "OK" : "MISSING")}\n";
+            report += $"  [{(hasAssistant ? "+" : "X")}] Unity AI Assistant — {(hasAssistant ? "OK" : "MISSING")}\n";
 
             // Optional packages
             report += "\nOptional Packages:\n";
             foreach (var pkg in OptionalPackages)
             {
                 bool installed = pkg.IsInstalled();
-                string status = installed ? "ENABLED" : "not installed";
                 string altNote = !string.IsNullOrEmpty(pkg.AltPackageId)
                     ? $" (or {pkg.AltPackageId})" : "";
                 report += $"  [{(installed ? "+" : "-")}] {pkg.FriendlyName}\n";
-                report += $"       {pkg.PackageId}{altNote} — {status}\n";
+                report += $"       {pkg.PackageId}{altNote} — {(installed ? "ENABLED" : "not installed")}\n";
                 if (!installed)
                     report += $"       → Install to enable: {pkg.FeatureDescription}\n";
             }
+
+            // Report output
+            string reportsDir = Path.Combine(projectRoot, "AgentReports");
+            bool reportsExist = Directory.Exists(reportsDir);
+            report += $"\nReport Output:\n  [{(reportsExist ? "+" : "-")}] AgentReports/";
+            report += reportsExist ? " — exists\n" : " — auto-created on first diagnostic run\n";
 
             Debug.Log($"[Axiom] Installation Verification:\n{report}");
             EditorUtility.DisplayDialog("Axiom — Verification", report, "OK");
@@ -415,29 +456,19 @@ namespace Axiom.Editor.Installer
 
         // ── Helpers ───────────────────────────────────────────────────────
 
-        /// <summary>
-        /// Checks whether a package ID appears in Packages/manifest.json dependencies.
-        /// Uses a simple string search — sufficient for UPM package IDs which are unique reverse-DNS names.
-        /// </summary>
         internal static bool IsPackageInstalled(string packageId)
         {
             if (string.IsNullOrEmpty(packageId)) return false;
-
             try
             {
                 string manifestPath = Path.Combine(
                     Path.GetDirectoryName(Application.dataPath),
                     "Packages", "manifest.json");
-
                 if (!File.Exists(manifestPath)) return false;
                 string json = File.ReadAllText(manifestPath);
-                // Match "com.example.package": to avoid false substring hits
                 return json.Contains($"\"{packageId}\":");
             }
-            catch
-            {
-                return false;
-            }
+            catch { return false; }
         }
 
         private static string BuildInstalledSummary()
